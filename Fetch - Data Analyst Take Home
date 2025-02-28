@@ -1,1 +1,295 @@
 
+Are there any data quality issues present?
+Products:
+Missing Values: Some entries in MANUFACTURER and BRAND are missing.
+Category 4 has the most missing values (778k) followed by Manufacturer (226k) and Brand (226k)
+Categorization Depth: The dataset organizes products into multiple category levels, but CATEGORY_4 is mostly empty.
+92% of values are missing in Category 4 whereas for Manufacturer and Brand only 26.8% of values are missing respectively in each category. Category 3 has 7% of values missing.
+Duplicated Barcodes: 185 duplicated barcodes exist.
+Handled missing BIRTH_DATE entries by labeling them "Unknown."
+Left missing values in STATE, LANGUAGE, and GENDER as-is for initial analysis, noting their presence.
+Transaction:
+Missing Values: Some fields in BARCODE are null and some fields in FINAL_SALE are empty.
+Data Formatting Issues:
+•	FINAL_QUANTITY has “zero” as a text entry instead of numerical zero for 12,500 records.
+Potential Data Cleaning Needed: Converting numeric fields and handling missing values.
+Users:
+Missing Values: There are 3,675 missing birth date values 
+Unrealistic ages; Some values >120
+Inconsistent Gender Values: Too many duplicate gender options
+
+Are there any fields that are challenging to understand?
+The final sale field is difficult to understand because I need documentation to understand what the field means. There are many empty final sale fields. I assume they also include returns or items with deficiencies. 
+For the language field, I’m curious why there is a null option. How can there not be a language when a user is regularly interacting with the interface?
+Observations:
+Date Range: The purchases span from mid-June 2024 (e.g., 2024-06-12) to early September 2024 (e.g., 2024-09-08), with scan dates sometimes occurring a few days after the purchase date. The difference between PURCHASE_DATE and SCAN_DATE varies, with some scans happening days later (e.g., 2024-07-13, 2024-07-17). Only 94 records have a scan date before the purchase date. I would assume that most items should be scanned first before they can have a transaction/purchase date?
+
+Stores: Common stores include Walmart, followed by Dollar General Store, ALDI, Kroger, and Target among others. Walmart appears frequently (21.3k) whereas Dollar General Store has 2.7k records and Target has 1.48k records.
+
+Quantities: The FINAL_QUANTITY is often 1.00, but occasionally zero or higher (e.g., 0 lowest or 9.00 highest). A quantity of zero might indicate a return, voided item, or data entry issue. 110 records do not end in .00, suggesting potentially food items or items that are not measured per unit strictly.
+
+Sale Prices: The FINAL_SALE field is sometimes blank or zero, but when populated, prices range from as low as $0.01 to higher amounts like $93.67. Missing prices could indicate incomplete data or free items (e.g., promotions). The most common final_sale price is 1.25 followed by 1.00 and 2.99.
+Missing Values and Inconsistencies
+Several fields in the dataset contain missing or placeholder values. The table below summarizes the missing data frequency in each column:
+Column	Missing Values	% of Records
+CATEGORY_1	111			0.013%
+CATEGORY_2	1,424			0.17%
+CATEGORY_3	60,566			7.2%
+CATEGORY_4	778,093		92.0%
+MANUFACTURER	226,474		26.8%
+BRAND		226,472		26.8%
+BARCODE	4,025				0.48%
+226,472 entries have both manufacturer and brand missing.
+Barcodes: Many entries have barcodes, but some are missing (blank). This could reflect items without scannable codes or unrecorded data. 185 barcodes in the products table also have at least one duplicate record which could be worrisome for data entry and duplication when exploring the data set or conducting analysis. In fact there are 24 barcodes that are duplicating amongst both the products and transactions tables. We can use the following code to deduplicate the products table: 
+with duplicates as (SELECT barcode, count(*) FROM `skilful-ethos-382300.123.products`  where barcode is not null group by 1 having count(*) <> 1),
+-- distinct barcoded products
+products as
+(SELECT  distinct * FROM `skilful-ethos-382300.123.products` where barcode in (select barcode from duplicates)
+union all
+SELECT  * FROM `skilful-ethos-382300.123.products` where barcode not in (select barcode from duplicates)),
+This code allows us to find the 185 duplicate barcodes in products and deduplicate them so we go from 370 records to 212. We are able to get rid of 158 duplicated records overall. There are still 27 records that are duplicating but we keep those records because they correspond to unique values they are categorizing. We should, however, consider changing those values to unique barcodes given that this table needs a primary key. Otherwise, we cannot join the transaction table without duplication.
+What are the top 5 brands by receipts scanned among users 21 and over? There are 59 brands with the same total receipt counts, ranging from 6, 4, and  2.
+/*The average number of days in 21 years depends on the number of leap years within that period.
+Calculation:
+ • A normal year has 365 days.
+ • A leap year has 366 days (occurs every 4 years, except century years not divisible by 400).
+Approximate Calculation:
+ • In 21 years, there are about 5 leap years (since 21 ÷ 4 ≈ 5.25).
+ • (16 normal years × 365) + (5 leap years × 366)
+ • = (16 × 365) + (5 × 366)
+ • = 5,840 + 1,830 = 7,670 days
+The average number of days in 21 years is approximately 7,670 days.*/
+What are the top 5 brands by receipts scanned among users 21 and over? 
+I created a join to find the brand and receipt id by users who are 21 and over. I created a dense rank function because there are many total receipt counts that are the same and wanted to account for all the "ties" amongst brands. I also considered counting just distinct receipt ids but opted not to as the question asks simply for receipts scanned. I also excluded brands that had receipts but were not categorized and ordered the brands by high counts of receipts first and then alphabetically. I included 59 brands because they all had similar receipt counts, hence they are all within the top 5 brands requirement of this question. 
+with duplicates as (SELECT barcode, count(*) FROM `skilful-ethos-382300.123.products`  where barcode is not null group by 1
+having count(*) <> 1),
+
+
+products as
+(SELECT distinct * FROM `skilful-ethos-382300.123.products` where barcode in (select barcode from duplicates)
+union all
+SELECT  * FROM `skilful-ethos-382300.123.products` where barcode not in (select barcode from duplicates)),
+
+
+users_21_and_over as (
+SELECT distinct id FROM `skilful-ethos-382300.123.user` where DATE_DIFF(CURRENT_DATE(),cast(birth_date as date),day) >= 7670 )
+
+
+select brand, total total_receipts from
+(select brand, total, dense_rank() over (partition by brand order by total desc) r from
+(select brand, count(receipt_id) total from users_21_and_over a
+join `skilful-ethos-382300.123.transaction` b
+on a.id=b.USER_ID
+join (select * from products where brand is not null) c
+on b.barcode=c.barcode
+group by 1) e)
+where r <=5
+order by 2 desc, 1
+
+
+What are the top 5 brands by sales among users that have had their account for at least six months? CVS $72, Dove $30.91, Tresemme $29.16, Trident $23.36, and Coors Light $17.48
+with duplicates as (SELECT barcode, count(*) FROM `skilful-ethos-382300.123.products`  where barcode is not null group by 1
+having count(*) <> 1),
+products as
+(SELECT distinct * FROM `skilful-ethos-382300.123.products` where barcode in (select barcode from duplicates)
+union all
+SELECT  * FROM `skilful-ethos-382300.123.products` where barcode not in (select barcode from duplicates)),
+-- finding the number of days in the past 6 months
+num_days_past as (
+SELECT DATE_DIFF(CURRENT_DATE(), DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH), DAY) AS days_in_past_6_months),
+-- finding the number of users with an account that has been created in the last 6 months
+users_w_an_account_for_at_least_6mo as (SELECT distinct id
+FROM `skilful-ethos-382300.123.user` where DATE_DIFF(CURRENT_DATE(),cast(created_date as date),day) >= (select * from num_days_past))
+-- calculating top 5 brand by total sales while excluding for data quality issues such as when final quality is 'zero' or when final_sale is blank and where the brand is null
+select brand, total_dollars from
+(select brand, total_dollars, dense_rank() over (order by total_dollars desc) r from
+(select brand, sum(cast(final_sale as numeric)*cast(final_quantity as numeric)) total_dollars from
+(select
+FINAL_SALE,
+FINAL_QUANTITY,
+brand
+from users_w_an_account_for_at_least_6mo a
+join (select * from `skilful-ethos-382300.123.transaction`  where final_quantity<>'zero' and FINAL_SALE not like '% %') b on a.id=b.USER_ID
+join (select * from products where brand is not null) c on b.BARCODE=c.BARCODE) c
+group by 1) d) e
+where r <=5
+order by 2 desc
+Which is the leading brand in the Dips & Salsa category?
+Assumption: can calculate this field in a lot of ways! By total number of barcode count total, receipt totals, etcetera… the possibilities are endless. Should probably be a multifaceted answer for that reason. However, Tostitos appears to be the brand with the top number of sales significantly and has the most barcode and user id counts respectively (12 distinct barcodes, 35 distinct users, $197.24 total sales), well above those of any other brand. 
+I also investigated counts of distinct barcodes and counts of distinct users because I was interested in seeing which brands had the most unique users and the most unique barcodes. 
+with duplicates as (SELECT barcode, count(*) FROM `skilful-ethos-382300.123.products`  where barcode is not null group by 1
+having count(*) <> 1),
+
+
+products as
+(SELECT distinct * FROM `skilful-ethos-382300.123.products` where barcode in (select barcode from duplicates)
+union all
+SELECT  * FROM `skilful-ethos-382300.123.products` where barcode not in (select barcode from duplicates)),
+
+
+transaction as (select * from `skilful-ethos-382300.123.transaction`  where final_quantity<>'zero' and final_sale not like '% %')
+
+
+select brand, count(distinct b.barcode) barcode_totals, count(distinct b.user_id) user_totals, sum(cast(final_quantity as numeric)*cast(final_sale as numeric)) sales_totals
+from transaction b
+join (select * from products where category_2 like '%Dips%Salsa%' and brand is not null) c on b.BARCODE=c.BARCODE
+group by 1
+order by 4 desc
+Construct an email or slack message that is understandable to a product or business leader who is not familiar with your day-to-day work. Summarize the results of your investigation. Include:
+Key data quality issues and outstanding questions about the data
+
+.	A) Placeholder or Unknown Entries:
+	•	Placeholder Manufacturers: 107,715 entries contain placeholder values like PLACEHOLDER MANUFACTURER or REM MANUFACTURER.
+	•	Unknown Brands: 51,305 entries have brands labeled as BRAND NOT KNOWN, PRIVATE LABEL, or REM BRAND.
+	B) Barcode Issues:
+	•	Invalid Barcodes: 3,519 entries have barcodes with fewer than 9 digits, suggesting possible data entry errors.
+Brand Variety: With over 8,000 unique brands, the product assortment is very diverse. However, a large portion of those brands correspond to relatively few items (since the average items per brand is ~104, but this is skewed by some huge brands and placeholders). Notably, the single “brand” with the most items in raw data was the placeholder REM BRAND (20k+ items) which we treated as unknown. 
+Excluding placeholders, actual brands like Dove, Vaseline, Kinder, Hershey’s, Pringles, etc., are among those appearing frequently. We also see many retailer-specific brands (e.g., CVS with 6,400 items, Rite Aid with 3,238, Meijer with 4,050) indicating that this dataset aggregates products across multiple retailers. This breadth suggests that any analysis of brand performance or assortment would need to account for a long tail of brands with few products and a handful with very large catalogs.
+Manufacturer Distribution: The products come from thousands of manufacturers, but a few large companies contribute a substantial share of items (once placeholders are set aside). 
+For example, after cleaning, the top manufacturers by count include major CPG companies like Procter & Gamble (~21k products), Unilever (~16.8k), L’Oréal (~16.7k), PepsiCo (~14.5k), and Johnson & Johnson (~10.4k). This aligns with expectations, as these giants have many brands and products (especially in personal care and snacks/beverages). 
+The presence of store brands is also significant – retailers like CVS, Target, Walmart, Rite Aid, etc., collectively account for tens of thousands of products, which reflects a strong representation of private label goods.
+One interesting trend in the data
+Use a finding from part 2 or come up with a new insight
+
+What is the percentage of sales in the Health & Wellness category by generation? Baby Boomers (37.15%), Generation X (26.35%), and Millennials (17.71%). Both The Silent Generation and Generation Z do not have sales. 
+with duplicates as (SELECT barcode, count(*) FROM `skilful-ethos-382300.123.products`  where barcode is not null group by 1
+having count(*) <> 1),
+
+
+products as
+(SELECT distinct * FROM `skilful-ethos-382300.123.products` where barcode in (select barcode from duplicates)
+union all
+SELECT  * FROM `skilful-ethos-382300.123.products` where barcode not in (select barcode from duplicates)),
+
+
+transaction as (select * from `skilful-ethos-382300.123.transaction`  where final_quantity<>'zero' and final_sale not like '% %'),
+
+
+health_and_wellness_sales as (select case when extract(year from cast(birth_date as date)) between 1928 and 1945 then 'The Silent Generation'
+when extract(year from cast(birth_date as date)) between 1946 and 1964 then 'Baby Boomers'
+when extract(year from cast(birth_date as date)) between 1965 and 1980 then 'Generation X'
+when extract(year from cast(birth_date as date)) between 1981 and 1996 then 'Millennials'
+when extract(year from cast(birth_date as date)) between 1997 and 2012 then 'Generation Z'
+when extract(year from cast(birth_date as date)) > 2012 then 'Generation Alpha' end Generations, sum(cast(final_quantity as numeric)*cast(final_sale as numeric)) sales
+from `skilful-ethos-382300.123.user` a
+join transaction b
+on a.id=b.user_id
+join (select * from products where category_1 like '%Health & Wellness%') c
+on b.BARCODE=c.BARCODE
+group by 1),
+
+
+total_sales as
+(select case when extract(year from cast(birth_date as date)) between 1928 and 1945 then 'The Silent Generation'
+when extract(year from cast(birth_date as date)) between 1946 and 1964 then 'Baby Boomers'
+when extract(year from cast(birth_date as date)) between 1965 and 1980 then 'Generation X'
+when extract(year from cast(birth_date as date)) between 1981 and 1996 then 'Millennials'
+when extract(year from cast(birth_date as date)) between 1997 and 2012 then 'Generation Z'
+when extract(year from cast(birth_date as date)) > 2012 then 'Generation Alpha' end Generations, sum(cast(final_quantity as numeric)*cast(final_sale as numeric)) sales
+from `skilful-ethos-382300.123.user` a
+join transaction b
+on a.id=b.user_id
+group by 1)
+select s.generations, ifnull(round(h.sales*100/s.sales,2),0) percentage_health_and_wellness_sales from total_sales s left join health_and_wellness_sales h on s.generations=h.generations
+At what percent has Fetch grown year over year?
+Fetch has grown at 98.57% on average year over year from 2017 to 2024. We are able to discover this percentage by self joining and calculating sales growth year over year before arriving at an averaged value.
+with duplicates as (SELECT barcode, count(*) FROM `skilful-ethos-382300.123.products`  where barcode is not null group by 1
+having count(*) <> 1),
+
+
+products as
+(SELECT distinct * FROM `skilful-ethos-382300.123.products` where barcode in (select barcode from duplicates)
+union all
+SELECT * FROM `skilful-ethos-382300.123.products` where barcode not in (select barcode from duplicates)),
+
+
+transaction as (select * from `skilful-ethos-382300.123.transaction`  where final_quantity<>'zero' and final_sale not like '% %'),
+
+
+yrly_sales as (select extract(year from cast(created_date as date)) year , sum(cast(final_quantity as numeric)*cast(final_sale as numeric)) sales
+from `skilful-ethos-382300.123.user` a
+join transaction b
+on a.id=b.user_id
+group by 1
+order by 1)
+
+
+select round(avg(yr_over_yr_growth),2) avg_yr_over_yr_growth from
+(select a.year, ((a.sales/b.sales)-1)*100 yr_over_yr_growth from yrly_sales a
+join yrly_sales b on a.year=b.year+1
+order by 1) c
+
+
+Who are Fetch’s power users? Fetch’s Top 5 Power Users are…
+643059f0838dd2651fb27f50
+$75.99
+
+
+
+
+
+5fd4fb485f410d44bae3a776
+$29.16
+
+
+
+
+
+62ffec490d9dbaff18c0a999
+$26.14
+
+
+
+5ea899202244e629eacd6785
+$22.68
+
+
+
+5f4c9055e81e6f162e3f6fa8
+$18.98
+
+
+
+with duplicates as (SELECT barcode, count(*) FROM `skilful-ethos-382300.123.products`  where barcode is not null group by 1
+having count(*) <> 1),
+
+
+products as
+(SELECT distinct * FROM `skilful-ethos-382300.123.products` where barcode in (select barcode from duplicates)
+union all
+SELECT  * FROM `skilful-ethos-382300.123.products` where barcode not in (select barcode from duplicates)),
+
+
+transaction as (select * from `skilful-ethos-382300.123.transaction`  where final_quantity<>'zero' and final_sale not like '% %')
+
+
+select a.id, sum(cast(final_quantity as numeric)*cast(final_sale as numeric)) sales
+from `skilful-ethos-382300.123.user` a
+join transaction b
+on a.id=b.user_id
+group by 1
+order by 2 desc
+Temporal Trends: July and August have 18.6k and 17.1k receipts respectively whereas June and September, in particular, drop off significantly. 
+Request for action: explain what additional help, info, etc. you need to make sense of the data and resolve any outstanding issues
+1. Clarifying Business Rules & Context
+	•	CATEGORY_4 Missing Values:
+	•	Is this category essential for your analysis? If yes, should missing values be inferred from other categories, or should rows with missing data be removed?
+	•	Placeholder Manufacturers & Brands:
+	•	Are placeholder values like PLACEHOLDER MANUFACTURER meaningful for your analysis, or should they be treated as missing values?
+	•	Is there an external reference (e.g., another dataset or list) to replace or validate these placeholders?
+2. Barcode Validity Criteria
+	•	What are the expected characteristics of valid barcodes?
+	•	Minimum length (e.g., should all barcodes have 11–12 digits)? If they’re UPC/EAN lengths shouldn’t they be 12-13 digits long? 
+	•	Are there specific formatting rules (e.g., must they be numeric, or can they include leading zeros)?
+	•	Should non-standard barcodes be corrected, or should affected rows be excluded?
+3. Data Cleaning Strategy Preferences
+	•	How would you like to handle missing data?
+	•	Drop rows with significant missing values?
+	•	Impute missing values using patterns from other columns (e.g., filling in CATEGORY_4 based on CATEGORY_3)?
+	•	Should I attempt deduplication or handle potentially repeated entries?
+4. Intended Use of the Data
+	•	What is your end goal for this dataset?
+	•	Is this for reporting, machine learning, product categorization, or another use case?
+	•	Are specific metrics or insights (e.g., sales trends by brand) needed?
+5. External Data Sources
+	•	Do you have access to any external sources (e.g., product databases) to validate missing or placeholder information?
